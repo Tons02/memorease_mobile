@@ -1,16 +1,19 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+// Import actions from authReducer to avoid circular dependency
+import { setCredentials, clearCredentials } from "./authReducer";
+import Constants from "expo-constants";
 
 const baseQuery = fetchBaseQuery({
-  baseUrl: process.env.MEMOREASEBACKEND_ENDPOINT, // Use process.env for React Native
+  baseUrl: Constants.expoConfig.extra.MEMOREASEBACKEND_ENDPOINT,
   prepareHeaders: async (headers) => {
     try {
-      // Get the authorization token from AsyncStorage
       const token = await AsyncStorage.getItem("token");
       if (token) {
         headers.set("Authorization", `Bearer ${token}`);
       }
       headers.set("Accept", "application/json");
+      headers.set("Content-Type", "application/json");
       return headers;
     } catch (error) {
       console.error("Error getting token from AsyncStorage:", error);
@@ -22,59 +25,81 @@ const baseQuery = fetchBaseQuery({
 export const apiSlice = createApi({
   reducerPath: "api",
   baseQuery,
+  tagTypes: ["User", "Auth"],
   endpoints: (builder) => ({
-    // Login endpoints
     login: builder.mutation({
       query: (credentials) => ({
         url: `/login`,
         method: "POST",
         body: credentials,
       }),
-      // Handle token storage after successful login
-      async onQueryStarted(arg, { queryFulfilled }) {
+      async onQueryStarted(arg, { dispatch, queryFulfilled }) {
         try {
           const { data } = await queryFulfilled;
           if (data?.token) {
             await AsyncStorage.setItem("token", data.token);
-            // You can also store user data if returned
-            if (data?.user) {
-              await AsyncStorage.setItem("user", JSON.stringify(data.user));
-            }
+            await AsyncStorage.setItem("user", JSON.stringify(data.data));
+            dispatch(setCredentials({ user: data.data, token: data.token }));
+            console.error("Login failesssd:", data.token);
           }
         } catch (error) {
           console.error("Login failed:", error);
         }
       },
+      invalidatesTags: ["Auth"],
     }),
+
+    register: builder.mutation({
+      query: (userData) => ({
+        url: `/register`,
+        method: "POST",
+        body: userData,
+      }),
+    }),
+
     logout: builder.mutation({
       query: () => ({
         url: "/logout",
         method: "POST",
       }),
-      // Clear token from AsyncStorage after logout
-      async onQueryStarted(arg, { queryFulfilled }) {
+      async onQueryStarted(arg, { dispatch, queryFulfilled }) {
         try {
           await queryFulfilled;
-          await AsyncStorage.removeItem("token");
         } catch (error) {
-          // Even if the API call fails, we should clear the local token
-          await AsyncStorage.removeItem("token");
+          console.error("Logout API failed:", error);
+        } finally {
+          // Always clear local storage and state
+          try {
+            await AsyncStorage.multiRemove(["token", "user"]);
+          } catch (storageError) {
+            console.error("Error clearing AsyncStorage:", storageError);
+          }
+          dispatch(clearCredentials());
         }
       },
+      invalidatesTags: ["Auth", "User"],
     }),
+
     changePassword: builder.mutation({
       query: (body) => ({
         url: `/changepassword`,
         method: "PATCH",
         body: body,
       }),
+      invalidatesTags: ["Auth"],
+    }),
+
+    getCurrentUser: builder.query({
+      query: () => "/me",
+      providesTags: ["User"],
     }),
   }),
 });
 
-// Export the generated hooks
 export const {
   useLoginMutation,
+  useRegisterMutation,
   useLogoutMutation,
   useChangePasswordMutation,
+  useGetCurrentUserQuery,
 } = apiSlice;

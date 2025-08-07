@@ -1,42 +1,48 @@
-import { Slot, useRouter, useSegments } from "expo-router";
-import { Provider as PaperProvider } from "react-native-paper";
-import { Provider as ReduxProvider } from "react-redux";
-import { useEffect } from "react";
-
+import React, { useEffect } from "react";
+import { Provider, useDispatch } from "react-redux";
+import { Stack } from "expo-router";
 import store from "../store";
+import { setCredentials } from "../store/slices/authReducer";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Provider as PaperProvider } from "react-native-paper";
 import theme from "../theme/theme";
-import { AuthProvider, useAuth } from "../hooks/useAuth";
 
-function RootLayoutNav() {
-  const { user, isLoading } = useAuth();
-  const segments = useSegments();
-  const router = useRouter();
+function AppInitializer({ children }) {
+  const dispatch = useDispatch();
 
   useEffect(() => {
-    if (isLoading) return;
+    const initializeAuth = async () => {
+      try {
+        const token = await AsyncStorage.getItem("token");
+        const userString = await AsyncStorage.getItem("user");
 
-    const inAuthGroup = segments[0] === "(auth)";
+        if (token && userString) {
+          const user = JSON.parse(userString);
+          dispatch(setCredentials({ user, token }));
+        }
+      } catch (error) {
+        console.error("Error initializing auth:", error);
+      }
+    };
 
-    if (user && !inAuthGroup) {
-      // Redirect to the dashboard if authenticated but not in auth group
-      router.replace("/(auth)");
-    } else if (!user && inAuthGroup) {
-      // Redirect to login if not authenticated but in auth group
-      router.replace("/login");
-    }
-  }, [user, segments, isLoading]);
+    initializeAuth();
+  }, [dispatch]);
 
-  return <Slot />;
+  return children;
 }
 
 export default function RootLayout() {
   return (
-    <ReduxProvider store={store}>
+    <Provider store={store}>
       <PaperProvider theme={theme}>
-        <AuthProvider>
-          <RootLayoutNav />
-        </AuthProvider>
+        <AppInitializer>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="index" />
+            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          </Stack>
+        </AppInitializer>
       </PaperProvider>
-    </ReduxProvider>
+    </Provider>
   );
 }

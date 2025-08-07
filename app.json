@@ -2,6 +2,7 @@
   "expo": {
     "name": "memoreased_mobile",
     "slug": "memoreased_mobile",
+    "scheme": "memoreased",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -20,6 +21,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "softwareKeyboardLayoutMode": "pan",
       "edgeToEdgeEnabled": true
     },
     "web": {
@@ -37,5 +39,10 @@
         }
       ]
     ]
+  },
+  "expo": {
+    "extra": {
+      "MEMOREASEBACKEND_ENDPOINT": "http://10.10.12.12:8009/api/"
+    }
   }
 }
