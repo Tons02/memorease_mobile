@@ -1,15 +1,49 @@
-import React from "react";
-import { View, Text, StyleSheet, SafeAreaView, ScrollView } from "react-native";
+import React, { useEffect } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  SafeAreaView,
+  ScrollView,
+  TouchableOpacity,
+} from "react-native";
 import { useSelector } from "react-redux";
 import {
   selectCurrentUser,
   selectIsAuthenticated,
 } from "../../store/slices/authReducer";
 import { SignOutButton } from "../../components/SignOutButton";
+import { Button } from "react-native-paper";
+import { useGetDeceasedQuery } from "../../store/slices/deceasedSlice";
+import {
+  getDeceasedData,
+  initDeceasedTable,
+  insertDeceasedData,
+} from "../../sql/deceasedData";
 
 export default function ProfileScreen() {
   const user = useSelector(selectCurrentUser);
   const isAuthenticated = useSelector(selectIsAuthenticated);
+
+  useEffect(() => {
+    const setupDb = async () => {
+      try {
+        await initDeceasedTable();
+        console.log("Deceased table ready");
+      } catch (error) {
+        console.error("Error initializing DB:", error);
+      }
+    };
+
+    setupDb();
+  }, []);
+
+  const { data: DeceasedData, isLoading } = useGetDeceasedQuery({
+    search: "",
+    pagination: "none",
+    status: "active",
+    is_private: 0,
+  });
 
   if (!isAuthenticated) {
     return (
@@ -44,9 +78,38 @@ export default function ProfileScreen() {
               <Text style={styles.value}>{user.email}</Text>
             </View>
           )}
-        </ScrollView>
+        </ScrollView>{" "}
         <View style={styles.actions}>
-          <SignOutButton />
+          <TouchableOpacity
+            style={[styles.syncButton]}
+            onPress={async () => {
+              if (DeceasedData?.data) {
+                console.log(
+                  "✅ Button pressed, data received:",
+                  DeceasedData.data
+                );
+
+                try {
+                  await insertDeceasedData(DeceasedData.data);
+                  console.log("✅ Insert finished");
+
+                  const offline = await getDeceasedData();
+                  console.log(
+                    "✅ Retrieved from DB:",
+                    JSON.stringify(offline, null, 2)
+                  );
+                } catch (error) {
+                  console.error("❌ Error saving or retrieving data:", error);
+                }
+              } else {
+                console.warn("⚠️ No data found in DeceasedData?.data");
+              }
+            }}
+          >
+            <Text style={styles.syncButtonText}>Sync Data</Text>
+          </TouchableOpacity>
+
+          <SignOutButton style={{ marginTop: 10 }} />
         </View>
       </View>
     </SafeAreaView>
@@ -94,5 +157,20 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 30,
     alignItems: "center",
+  },
+  syncButton: {
+    backgroundColor: "#15803d",
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 48,
+    width: 300,
+  },
+  syncButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });

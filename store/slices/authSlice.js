@@ -40,7 +40,6 @@ export const apiSlice = createApi({
             await AsyncStorage.setItem("token", data.token);
             await AsyncStorage.setItem("user", JSON.stringify(data.data));
             dispatch(setCredentials({ user: data.data, token: data.token }));
-            console.error("Login failesssd:", data.token);
           }
         } catch (error) {
           console.error("Login failed:", error);

@@ -5,6 +5,7 @@ export const tokenUtils = {
   async setToken(token) {
     try {
       await AsyncStorage.setItem("token", token);
+      console.log(" storing token:", error);
     } catch (error) {
       console.error("Error storing token:", error);
     }

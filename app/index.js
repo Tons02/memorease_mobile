@@ -1,24 +1,37 @@
-import { Redirect } from "expo-router";
-import { useAuth } from "../hooks/useAuth";
-import { View } from "react-native";
-import { ActivityIndicator } from "react-native-paper";
+import { useEffect } from "react";
+import { useRouter } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { View, ActivityIndicator, StyleSheet } from "react-native";
 
 export default function Index() {
-  const { user, isLoading } = useAuth();
+  const router = useRouter();
 
-  // Show loading spinner while checking auth state
-  if (isLoading) {
-    return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" />
-      </View>
-    );
-  }
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = await AsyncStorage.getItem("token");
+      const userString = await AsyncStorage.getItem("user");
 
-  // Redirect based on authentication status
-  if (user) {
-    return <Redirect href="/(auth)" />;
-  } else {
-    return <Redirect href="/login" />;
-  }
+      if (token && userString) {
+        router.replace("/(tabs)");
+      } else {
+        router.replace("/login");
+      }
+    };
+
+    checkAuth();
+  }, []);
+
+  return (
+    <View style={styles.container}>
+      <ActivityIndicator size="large" color="#15803d" />
+    </View>
+  );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+});
