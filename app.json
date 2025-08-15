@@ -3,7 +3,15 @@
     "extra": {
       "MEMOREASEBACKEND_ENDPOINT": "http://10.10.12.12:8009/api/"
     },
-    "plugins": ["expo-sqlite"],
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location for navigation to cemetery lots."
+        }
+      ],
+      "expo-sqlite"
+    ],
 
     "android": {
       "package": "com.anonymous.memoreased_mobile"

@@ -8,24 +8,24 @@ async function getDb() {
 export async function initDeceasedTable() {
   const db = await getDb();
   await db.execAsync(`
-  CREATE TABLE deceased (
-    id INTEGER PRIMARY KEY,
-    fname TEXT,
-    lname TEXT,
-    mname TEXT,
-    suffix TEXT,
-    full_name TEXT,
-    gender TEXT,
-    birthday TEXT,
-    death_date TEXT,
-    death_certificate TEXT,
-    lot_id INTEGER,
-    lot_coordinates TEXT,
-    lot_image TEXT,
-    is_private INTEGER,
-    visibility TEXT
-  );
-`);
+    CREATE TABLE IF NOT EXISTS deceased (
+      id INTEGER PRIMARY KEY,
+      fname TEXT,
+      lname TEXT,
+      mname TEXT,
+      suffix TEXT,
+      full_name TEXT,
+      gender TEXT,
+      birthday TEXT,
+      death_date TEXT,
+      death_certificate TEXT,
+      lot_id INTEGER,
+      lot_coordinates TEXT,
+      lot_image TEXT,
+      is_private INTEGER,
+      visibility TEXT
+    );
+  `);
 }
 
 export async function insertDeceasedData(items = []) {

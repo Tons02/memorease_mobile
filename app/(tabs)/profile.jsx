@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   SafeAreaView,
   ScrollView,
   TouchableOpacity,
+  ActivityIndicator,
 } from "react-native";
 import { useSelector } from "react-redux";
 import {
@@ -13,7 +14,7 @@ import {
   selectIsAuthenticated,
 } from "../../store/slices/authReducer";
 import { SignOutButton } from "../../components/SignOutButton";
-import { Button } from "react-native-paper";
+import { Button, Snackbar } from "react-native-paper";
 import { useGetDeceasedQuery } from "../../store/slices/deceasedSlice";
 import {
   getDeceasedData,
@@ -24,6 +25,12 @@ import {
 export default function ProfileScreen() {
   const user = useSelector(selectCurrentUser);
   const isAuthenticated = useSelector(selectIsAuthenticated);
+
+  // State for sync operation
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState("");
+  const [snackbarType, setSnackbarType] = useState("success"); // 'success', 'info', 'error'
 
   useEffect(() => {
     const setupDb = async () => {
@@ -44,6 +51,130 @@ export default function ProfileScreen() {
     status: "active",
     is_private: 0,
   });
+
+  // Function to show snackbar
+  const showSnackbar = (message, type = "success") => {
+    setSnackbarMessage(message);
+    setSnackbarType(type);
+    setSnackbarVisible(true);
+  };
+
+  // Function to compare two datasets
+  const compareData = (apiData, sqliteData) => {
+    // If lengths are different, data is different
+    if (apiData.length !== sqliteData.length) {
+      return false;
+    }
+
+    // Create a map of API data for quick lookup
+    const apiDataMap = new Map();
+    apiData.forEach((item) => {
+      // Create a unique key for comparison (you might want to adjust this based on your data structure)
+      const key = `${item.id}_${item.fname}_${item.lname}_${item.lot_id}`;
+      apiDataMap.set(key, {
+        ...item,
+        // Normalize dates for comparison
+        birthday: item.birthday
+          ? new Date(item.birthday).toISOString().split("T")[0]
+          : null,
+        death_date: item.death_date
+          ? new Date(item.death_date).toISOString().split("T")[0]
+          : null,
+      });
+    });
+
+    // Check if all SQLite data exists in API data with same values
+    for (const sqliteItem of sqliteData) {
+      const key = `${sqliteItem.id}_${sqliteItem.fname}_${sqliteItem.lname}_${sqliteItem.lot_id}`;
+      const apiItem = apiDataMap.get(key);
+
+      if (!apiItem) {
+        console.log(`Item not found in API: ${key}`);
+        return false;
+      }
+
+      // Compare key fields (adjust based on your needs)
+      const fieldsToCompare = [
+        "full_name",
+        "gender",
+        "birthday",
+        "death_date",
+        "death_certificate",
+        "lot_image",
+        "is_private",
+        "visibility",
+      ];
+
+      for (const field of fieldsToCompare) {
+        if (apiItem[field] !== sqliteItem[field]) {
+          console.log(`Field ${field} differs for ${key}:`, {
+            api: apiItem[field],
+            sqlite: sqliteItem[field],
+          });
+          return false;
+        }
+      }
+
+      // Compare lot_coordinates if they exist
+      if (apiItem.lot_coordinates && sqliteItem.lot_coordinates) {
+        const apiCoords = JSON.stringify(apiItem.lot_coordinates);
+        const sqliteCoords = JSON.stringify(sqliteItem.lot_coordinates);
+        if (apiCoords !== sqliteCoords) {
+          console.log(`Coordinates differ for ${key}`);
+          return false;
+        }
+      }
+    }
+
+    return true;
+  };
+
+  const handleSync = async () => {
+    if (!DeceasedData?.data) {
+      showSnackbar("No data found to sync", "error");
+      return;
+    }
+
+    setIsSyncing(true);
+
+    try {
+      console.log("🔄 Starting sync process...");
+
+      // Get current SQLite data
+      const currentSqliteData = await getDeceasedData();
+      console.log("📱 Current SQLite data count:", currentSqliteData.length);
+      console.log("🌐 API data count:", DeceasedData.data.length);
+
+      // Compare data
+      const isSameData = compareData(DeceasedData.data, currentSqliteData);
+
+      if (isSameData) {
+        console.log("✅ Data is the same, no sync needed");
+        showSnackbar("Data is already up to date", "info");
+        return;
+      }
+
+      console.log("🔄 Data differs, proceeding with sync...");
+
+      // Insert new data
+      await insertDeceasedData(DeceasedData.data);
+      console.log("✅ Data sync completed successfully");
+
+      // Verify the sync
+      const updatedData = await getDeceasedData();
+      console.log("✅ Updated SQLite data count:", updatedData.length);
+
+      showSnackbar(
+        `Successfully synced ${DeceasedData.data.length} records`,
+        "success"
+      );
+    } catch (error) {
+      console.error("❌ Error during sync:", error);
+      showSnackbar("Sync failed. Please try again.", "error");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   if (!isAuthenticated) {
     return (
@@ -78,40 +209,55 @@ export default function ProfileScreen() {
               <Text style={styles.value}>{user.email}</Text>
             </View>
           )}
-        </ScrollView>{" "}
+        </ScrollView>
+
         <View style={styles.actions}>
           <TouchableOpacity
-            style={[styles.syncButton]}
-            onPress={async () => {
-              if (DeceasedData?.data) {
-                console.log(
-                  "✅ Button pressed, data received:",
-                  DeceasedData.data
-                );
-
-                try {
-                  await insertDeceasedData(DeceasedData.data);
-                  console.log("✅ Insert finished");
-
-                  const offline = await getDeceasedData();
-                  console.log(
-                    "✅ Retrieved from DB:",
-                    JSON.stringify(offline, null, 2)
-                  );
-                } catch (error) {
-                  console.error("❌ Error saving or retrieving data:", error);
-                }
-              } else {
-                console.warn("⚠️ No data found in DeceasedData?.data");
-              }
-            }}
+            style={[
+              styles.syncButton,
+              (isSyncing || isLoading) && styles.syncButtonDisabled,
+            ]}
+            onPress={handleSync}
+            disabled={isSyncing || isLoading}
           >
-            <Text style={styles.syncButtonText}>Sync Data</Text>
+            {isSyncing ? (
+              <View style={styles.syncButtonContent}>
+                <ActivityIndicator
+                  size="small"
+                  color="#fff"
+                  style={styles.spinner}
+                />
+                <Text style={styles.syncButtonText}>Syncing...</Text>
+              </View>
+            ) : (
+              <Text style={styles.syncButtonText}>
+                {isLoading ? "Loading..." : "Sync Data"}
+              </Text>
+            )}
           </TouchableOpacity>
 
           <SignOutButton style={{ marginTop: 10 }} />
         </View>
       </View>
+
+      {/* Snackbar for notifications */}
+      <Snackbar
+        visible={snackbarVisible}
+        onDismiss={() => setSnackbarVisible(false)}
+        duration={4000}
+        style={[
+          styles.snackbar,
+          snackbarType === "success" && styles.snackbarSuccess,
+          snackbarType === "info" && styles.snackbarInfo,
+          snackbarType === "error" && styles.snackbarError,
+        ]}
+        action={{
+          label: "OK",
+          onPress: () => setSnackbarVisible(false),
+        }}
+      >
+        <Text style={styles.snackbarText}>{snackbarMessage}</Text>
+      </Snackbar>
     </SafeAreaView>
   );
 }
@@ -168,9 +314,37 @@ const styles = StyleSheet.create({
     minHeight: 48,
     width: 300,
   },
+  syncButtonDisabled: {
+    backgroundColor: "#9ca3af",
+    opacity: 0.7,
+  },
+  syncButtonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   syncButtonText: {
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
+  },
+  spinner: {
+    marginRight: 8,
+  },
+  snackbar: {
+    backgroundColor: "#333",
+  },
+  snackbarSuccess: {
+    backgroundColor: "#15803d",
+  },
+  snackbarInfo: {
+    backgroundColor: "#2563eb",
+  },
+  snackbarError: {
+    backgroundColor: "#dc2626",
+  },
+  snackbarText: {
+    color: "#fff",
+    fontSize: 14,
   },
 });

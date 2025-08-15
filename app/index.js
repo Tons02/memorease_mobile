@@ -21,11 +21,7 @@ export default function Index() {
     checkAuth();
   }, []);
 
-  return (
-    <View style={styles.container}>
-      <ActivityIndicator size="large" color="#15803d" />
-    </View>
-  );
+  return <></>;
 }
 
 const styles = StyleSheet.create({

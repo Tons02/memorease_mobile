@@ -11,7 +11,10 @@ import {
   Modal,
   SafeAreaView,
   Image,
+  Linking,
+  Alert,
 } from "react-native";
+import * as Location from "expo-location";
 import { getDeceasedData, initDeceasedTable } from "../../sql/deceasedData";
 
 export default function HomeScreen() {
@@ -22,23 +25,64 @@ export default function HomeScreen() {
   const [query, setQuery] = useState("");
   const [filtered, setFiltered] = useState([]);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [userLocation, setUserLocation] = useState(null);
   const webViewRef = useRef(null);
+
+  // Request location permission and get location
+  const requestLocationPermission = async () => {
+    try {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        console.log("Permission to access location was denied");
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error("Error requesting location permission:", error);
+      return false;
+    }
+  };
+
+  // Get user's current location
+  const getCurrentLocation = async () => {
+    try {
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+        timeInterval: 5000,
+        distanceInterval: 1,
+      });
+      const { latitude, longitude } = location.coords;
+      setUserLocation({ latitude, longitude });
+      return { latitude, longitude };
+    } catch (error) {
+      console.error("Location error:", error);
+      throw error;
+    }
+  };
 
   // Initialize DB and load data once
   useEffect(() => {
     (async () => {
       try {
         console.log("Deceased table ready");
-
         const localData = await getDeceasedData();
         console.log(
           "✅ Retrieved from DB:",
           JSON.stringify(localData, null, 2)
         );
         if (!localData || localData.length === 0) {
-          alert("No offline data found. Please sync firsdst.");
+          alert("No offline data found. Please sync first.");
         } else {
-          setDeceasedData(localData);
+          // Transform the data to include lot object with coordinates
+          const transformedData = localData.map((person) => ({
+            ...person,
+            lot: {
+              id: person.lot_id,
+              lot_number: person.lot_id, // You might want to add actual lot_number to your DB
+              coordinates: person.lot_coordinates || [],
+            },
+          }));
+          setDeceasedData(transformedData);
         }
       } catch (error) {
         console.error("Error initializing DB:", error);
@@ -46,6 +90,21 @@ export default function HomeScreen() {
         setLoading(false);
       }
     })();
+  }, []);
+
+  // Get user location on component mount
+  useEffect(() => {
+    const getLocation = async () => {
+      const hasPermission = await requestLocationPermission();
+      if (hasPermission) {
+        try {
+          await getCurrentLocation();
+        } catch (error) {
+          console.log("Could not get location:", error.message);
+        }
+      }
+    };
+    getLocation();
   }, []);
 
   // Search filter
@@ -68,21 +127,33 @@ export default function HomeScreen() {
     }
   }, [deceasedData, mapLoaded]);
 
-  console.log("deceasedData for mapping:", deceasedData);
+  console.log(
+    "deceasedData for mapping:",
+    JSON.stringify(deceasedData, null, 2)
+  );
 
-  // Group by lot
+  // Group by lot - Fixed version
   const lotGroups =
     deceasedData.reduce((groups, person) => {
       const lot = person.lot;
-      if (!lot || !Array.isArray(lot.coordinates) || lot.coordinates.length < 3)
+
+      // Check if lot exists and has valid coordinates
+      if (
+        !lot ||
+        !Array.isArray(lot.coordinates) ||
+        lot.coordinates.length < 3
+      ) {
+        console.warn(`Invalid lot data for person ${person.full_name}:`, lot);
         return groups;
+      }
 
       const lotId = lot.id || person.lot_id;
+
       if (!groups[lotId]) {
         groups[lotId] = {
           lot: {
             id: lotId,
-            lot_number: lot.lot_number,
+            lot_number: lot.lot_number || lotId,
             coordinates: lot.coordinates.map(([latitude, longitude]) => ({
               latitude,
               longitude,
@@ -91,6 +162,7 @@ export default function HomeScreen() {
           deceased: [],
         };
       }
+
       groups[lotId].deceased.push(person);
       return groups;
     }, {}) || {};
@@ -113,6 +185,7 @@ export default function HomeScreen() {
         latitude,
         longitude,
       }));
+
       const center = {
         lat: coords.reduce((sum, c) => sum + c.latitude, 0) / coords.length,
         lng: coords.reduce((sum, c) => sum + c.longitude, 0) / coords.length,
@@ -126,13 +199,20 @@ export default function HomeScreen() {
       webViewRef.current?.postMessage(JSON.stringify(message));
 
       const lotId = lot.id || person.lot_id;
-      setSelectedLot({ lotId, lot, deceased: [person] });
+      setSelectedLot({
+        lotId,
+        lot,
+        deceased: [person],
+      });
       setModalVisible(true);
     }
   };
 
   const handleMarkerPress = (lotId, lotData) => {
-    setSelectedLot({ lotId, ...lotData });
+    setSelectedLot({
+      lotId,
+      ...lotData,
+    });
     setModalVisible(true);
   };
 
@@ -141,152 +221,283 @@ export default function HomeScreen() {
     setSelectedLot(null);
   };
 
+  // Navigation function
+  const handleNavigate = async () => {
+    if (
+      !selectedLot?.lot?.coordinates ||
+      selectedLot.lot.coordinates.length === 0
+    ) {
+      Alert.alert("Error", "No coordinates available for this lot.");
+      return;
+    }
+
+    // Calculate center of the lot
+    const coords = selectedLot.lot.coordinates;
+    const centerLat =
+      coords.reduce((sum, c) => sum + c.latitude, 0) / coords.length;
+    const centerLng =
+      coords.reduce((sum, c) => sum + c.longitude, 0) / coords.length;
+
+    // If we have user's location, show options, otherwise just open maps
+    if (userLocation) {
+      Alert.alert(
+        "Navigation Options",
+        "Choose your preferred navigation app:",
+        [
+          {
+            text: "Google Maps",
+            onPress: () => openGoogleMaps(centerLat, centerLng),
+          },
+          {
+            text: "Apple Maps",
+            onPress: () => openAppleMaps(centerLat, centerLng),
+          },
+          {
+            text: "Waze",
+            onPress: () => openWaze(centerLat, centerLng),
+          },
+          {
+            text: "Cancel",
+            style: "cancel",
+          },
+        ]
+      );
+    } else {
+      // Try to get location first
+      try {
+        const hasPermission = await requestLocationPermission();
+        if (hasPermission) {
+          await getCurrentLocation();
+          openGoogleMaps(centerLat, centerLng);
+        } else {
+          // Open without navigation, just show location
+          const url = `https://www.google.com/maps/search/?api=1&query=${centerLat},${centerLng}`;
+          Linking.openURL(url);
+        }
+      } catch (error) {
+        // Fallback to just showing the location
+        const url = `https://www.google.com/maps/search/?api=1&query=${centerLat},${centerLng}`;
+        Linking.openURL(url);
+      }
+    }
+  };
+
+  const openGoogleMaps = (lat, lng) => {
+    const url = userLocation
+      ? `https://www.google.com/maps/dir/?api=1&origin=${userLocation.latitude},${userLocation.longitude}&destination=${lat},${lng}&travelmode=driving`
+      : `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+
+    Linking.openURL(url).catch(() => {
+      Alert.alert("Error", "Could not open Google Maps");
+    });
+  };
+
+  const openAppleMaps = (lat, lng) => {
+    const url = userLocation
+      ? `http://maps.apple.com/?saddr=${userLocation.latitude},${userLocation.longitude}&daddr=${lat},${lng}&dirflg=d`
+      : `http://maps.apple.com/?q=${lat},${lng}`;
+
+    Linking.openURL(url).catch(() => {
+      Alert.alert("Error", "Could not open Apple Maps");
+    });
+  };
+
+  const openWaze = (lat, lng) => {
+    const url = `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+
+    Linking.openURL(url).catch(() => {
+      Alert.alert("Error", "Could not open Waze. Make sure Waze is installed.");
+    });
+  };
+
   // Create HTML for the map
   const createMapHTML = () => {
-    return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-      <title>Cemetery Map</title>
-      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
-      <style>
-        body { margin: 0; padding: 0; font-family: Arial, sans-serif; }
-        #map { height: 100vh; width: 100vw; }
-        .custom-popup { font-family: Arial, sans-serif; min-width: 150px; }
-        .custom-popup h3 { margin: 0 0 10px 0; color: #15803d; font-size: 16px; }
-        .custom-popup p { margin: 3px 0; font-size: 14px; }
-        .custom-popup .person-list { max-height: 100px; overflow-y: auto; }
-        .loading {
-          position: absolute; top: 50%; left: 50%;
-          transform: translate(-50%, -50%);
-          z-index: 1000;
-          background: rgba(255,255,255,0.9);
-          padding: 20px; border-radius: 10px;
-          text-align: center;
-        }
-      </style>
-    </head>
-    <body>
-      <div id="loading" class="loading">Loading map...</div>
-      <div id="map"></div>
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Cemetery Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""/>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+    }
+    #map {
+      height: 100vh;
+      width: 100vw;
+    }
+    .custom-popup {
+      font-family: Arial, sans-serif;
+      min-width: 150px;
+    }
+    .custom-popup h3 {
+      margin: 0 0 10px 0;
+      color: #15803d;
+      font-size: 16px;
+    }
+    .custom-popup p {
+      margin: 3px 0;
+      font-size: 14px;
+    }
+    .custom-popup .person-list {
+      max-height: 100px;
+      overflow-y: auto;
+    }
+    .loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 1000;
+      background: rgba(255,255,255,0.9);
+      padding: 20px;
+      border-radius: 10px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading" class="loading">Loading map...</div>
+  <div id="map"></div>
+  
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""></script>
+  <script>
+    let map;
+    let lotLayers = {};
+    let markerLayers = {};
+
+    function initMap() {
+      try {
+        map = L.map('map', {
+          zoomControl: true,
+          attributionControl: true
+        }).setView([14.288592, 120.970574], 18);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap contributors',
+          maxZoom: 19,
+        }).addTo(map);
+
+        document.getElementById('loading').style.display = 'none';
+        sendMessage({ type: 'mapReady' });
+      } catch (error) {
+        console.error('Error initializing map:', error);
+      }
+    }
+
+    function sendMessage(message) {
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(message));
+      }
+    }
+
+    function clearLots() {
+      Object.values(lotLayers).forEach(layer => {
+        if (map.hasLayer(layer)) map.removeLayer(layer);
+      });
+      Object.values(markerLayers).forEach(layer => {
+        if (map.hasLayer(layer)) map.removeLayer(layer);
+      });
+      lotLayers = {};
+      markerLayers = {};
+    }
+
+    function updateMapData(lots) {
+      clearLots();
       
-      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-      
-      <script>
-        let map;
-        let lotLayers = {};
-        let markerLayers = {};
+      Object.entries(lots).forEach(([lotId, lotData]) => {
+        const lot = lotData.lot;
+        const deceased = lotData.deceased;
         
-        function initMap() {
-          try {
-            map = L.map('map', {
-              zoomControl: true,
-              attributionControl: true
-            }).setView([14.288592, 120.970574], 18);
-
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-              attribution: '© OpenStreetMap contributors',
-              maxZoom: 19,
-            }).addTo(map);
-
-            document.getElementById('loading').style.display = 'none';
-            sendMessage({ type: 'mapReady' });
-          } catch (error) {
-            console.error('Error initializing map:', error);
-          }
-        }
-
-        function sendMessage(message) {
-          if (window.ReactNativeWebView) {
-            window.ReactNativeWebView.postMessage(JSON.stringify(message));
-          }
-        }
-
-        function clearLots() {
-          Object.values(lotLayers).forEach(layer => { if (map.hasLayer(layer)) map.removeLayer(layer); });
-          Object.values(markerLayers).forEach(layer => { if (map.hasLayer(layer)) map.removeLayer(layer); });
-          lotLayers = {};
-          markerLayers = {};
-        }
-
-        function updateMapData(lots) {
-          clearLots();
-          Object.entries(lots).forEach(([lotId, lotData]) => {
-            const lot = lotData.lot;
-            const deceased = lotData.deceased;
-
-            const coords = lot.coordinates.map(c => [c.latitude, c.longitude]);
-            const polygon = L.polygon(coords, {
-              color: '#15803d', fillColor: '#15803d', fillOpacity: 0.3, weight: 2
-            });
-
-            const centerLat = coords.reduce((sum, c) => sum + c[0], 0) / coords.length;
-            const centerLng = coords.reduce((sum, c) => sum + c[1], 0) / coords.length;
-
-            const popupContent = \`
-              <div class="custom-popup">
-                <h3>Lot \${lot.lot_number}</h3>
-                <p><strong>\${deceased.length} \${deceased.length === 1 ? 'person' : 'people'}</strong></p>
-                <div class="person-list">
-                  \${deceased.map(person => '<p>• ' + person.full_name + '</p>').join('')}
-                </div>
-              </div>
-            \`;
-
-            const marker = L.marker([centerLat, centerLng], {
-              icon: L.divIcon({
-                html: \`<div style="
-                  background-color: #15803d;
-                  border: 3px solid white;
-                  border-radius: 50%;
-                  width: 32px; height: 32px;
-                  display: flex; align-items: center; justify-content: center;
-                  color: white; font-weight: bold; font-size: 12px;
-                  box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-                ">\${lot.lot_number}</div>\`,
-                className: 'custom-div-icon',
-                iconSize: [32, 32], iconAnchor: [16, 16]
-              })
-            });
-
-            marker.bindPopup(popupContent);
-            marker.on('click', () => sendMessage({
-              type: 'markerPress', lotId, lot, deceased
-            }));
-
-            polygon.addTo(map);
-            marker.addTo(map);
-
-            lotLayers[lotId] = polygon;
-            markerLayers[lotId] = marker;
-          });
-        }
-
-        function centerMap(coords) {
-          if (map) map.setView([coords.lat, coords.lng], 19, { animate: true, duration: 1 });
-        }
-
-        window.addEventListener('message', (event) => {
-          const message = JSON.parse(event.data);
-          if (message.type === 'updateData') updateMapData(message.data);
-          if (message.type === 'centerMap') centerMap(message.data);
+        const coords = lot.coordinates.map(c => [c.latitude, c.longitude]);
+        
+        const polygon = L.polygon(coords, {
+          color: '#15803d',
+          fillColor: '#15803d',
+          fillOpacity: 0.3,
+          weight: 2
         });
 
-        document.addEventListener('message', (event) => {
-          const message = JSON.parse(event.data);
-          if (message.type === 'updateData') updateMapData(message.data);
-          if (message.type === 'centerMap') centerMap(message.data);
+        const centerLat = coords.reduce((sum, c) => sum + c[0], 0) / coords.length;
+        const centerLng = coords.reduce((sum, c) => sum + c[1], 0) / coords.length;
+
+        const popupContent = \`
+          <div class="custom-popup">
+            <h3>Lot \${lot.lot_number}</h3>
+            <p><strong>\${deceased.length} \${deceased.length === 1 ? 'person' : 'people'}</strong></p>
+            <div class="person-list">
+              \${deceased.map(person => '<p>• ' + person.full_name + '</p>').join('')}
+            </div>
+          </div>
+        \`;
+
+        const marker = L.marker([centerLat, centerLng], {
+          icon: L.divIcon({
+            html: \`<div style="
+              background-color: #15803d;
+              border: 3px solid white;
+              border-radius: 50%;
+              width: 32px;
+              height: 32px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              color: white;
+              font-weight: bold;
+              font-size: 12px;
+              box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            ">\${lot.lot_number}</div>\`,
+            className: 'custom-div-icon',
+            iconSize: [32, 32],
+            iconAnchor: [16, 16]
+          })
         });
 
-        window.onload = () => { setTimeout(initMap, 1000); };
-      </script>
-    </body>
-    </html>
-  `;
+        marker.bindPopup(popupContent);
+        marker.on('click', () => sendMessage({
+          type: 'markerPress',
+          lotId,
+          lot,
+          deceased
+        }));
+
+        polygon.addTo(map);
+        marker.addTo(map);
+
+        lotLayers[lotId] = polygon;
+        markerLayers[lotId] = marker;
+      });
+    }
+
+    function centerMap(coords) {
+      if (map) map.setView([coords.lat, coords.lng], 19, { animate: true, duration: 1 });
+    }
+
+    window.addEventListener('message', (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === 'updateData') updateMapData(message.data);
+      if (message.type === 'centerMap') centerMap(message.data);
+    });
+
+    document.addEventListener('message', (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === 'updateData') updateMapData(message.data);
+      if (message.type === 'centerMap') centerMap(message.data);
+    });
+
+    window.onload = () => {
+      setTimeout(initMap, 1000);
+    };
+  </script>
+</body>
+</html>`;
   };
 
   const handleWebViewMessage = (event) => {
@@ -455,12 +666,20 @@ export default function HomeScreen() {
               </ScrollView>
 
               <View style={styles.modalFooter}>
-                <TouchableOpacity
-                  style={styles.closeModalButton}
-                  onPress={closeModal}
-                >
-                  <Text style={styles.closeModalButtonText}>Close</Text>
-                </TouchableOpacity>
+                <View style={styles.buttonRow}>
+                  <TouchableOpacity
+                    style={styles.navigateButton}
+                    onPress={handleNavigate}
+                  >
+                    <Text style={styles.navigateButtonText}>Navigate</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.closeModalButton}
+                    onPress={closeModal}
+                  >
+                    <Text style={styles.closeModalButtonText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           </SafeAreaView>
@@ -614,7 +833,24 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#e5e5e5",
   },
+  buttonRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  navigateButton: {
+    flex: 1,
+    backgroundColor: "#2563eb",
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  navigateButtonText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 16,
+  },
   closeModalButton: {
+    flex: 1,
     backgroundColor: "#15803d",
     borderRadius: 10,
     paddingVertical: 14,
